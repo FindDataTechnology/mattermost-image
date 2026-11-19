@@ -53,6 +53,14 @@ COPY --from=upstream /usr/lib/libwv.so*       /usr/lib/
 COPY --from=upstream /usr/lib/libtidy.so*     /usr/lib/
 COPY --from=upstream /usr/lib/libfontconfig.so* /usr/lib/
 
+# /etc/passwd with the mattermost user. Upstream ships its own copy via
+# `COPY passwd /etc/passwd`; the alpine base has no such entry, and without it
+# anything that resolves the uid fails — `mmctl` panics with
+# `user: unknown userid 2000` (measured 2026-11-19 on the live pod).
+# That matters: mmctl is the local-mode admin path used to bootstrap the first
+# admin account and to run `system status`.
+COPY --from=upstream /etc/passwd /etc/passwd
+
 # Same runtime contract as upstream.
 ENV PATH="/mattermost/bin:${PATH}" \
     MM_SERVICESETTINGS_ENABLELOCALMODE="true" \
