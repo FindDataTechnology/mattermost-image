@@ -156,6 +156,13 @@ jobs:
         run: |
           img="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
           docker push "$img:${{ steps.upstream.outputs.version }}"
+          # A second immutable tag. The relay's ledger is keyed on repo:tag and
+          # will NOT re-push a tag it has already synced, even when that tag's
+          # content changed upstream of it (observed 2026-11-19: ccr kept the
+          # old single-layer digest after the relay logged OK). A fresh tag name
+          # is a first-seen tag, which the relay does carry.
+          docker tag "$img:${{ steps.upstream.outputs.version }}" "$img:${{ steps.upstream.outputs.version }}-split"
+          docker push "$img:${{ steps.upstream.outputs.version }}-split"
           docker tag "$img:${{ steps.upstream.outputs.version }}" "$img:main"
           docker push "$img:main"
 
