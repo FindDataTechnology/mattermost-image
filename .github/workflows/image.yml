@@ -161,8 +161,8 @@ jobs:
           # content changed upstream of it (observed 2026-11-19: ccr kept the
           # old single-layer digest after the relay logged OK). A fresh tag name
           # is a first-seen tag, which the relay does carry.
-          docker tag "$img:${{ steps.upstream.outputs.version }}" "$img:${{ steps.upstream.outputs.version }}-split"
-          docker push "$img:${{ steps.upstream.outputs.version }}-split"
+          docker tag "$img:${{ steps.upstream.outputs.version }}" "$img:${{ steps.upstream.outputs.version }}-split2"
+          docker push "$img:${{ steps.upstream.outputs.version }}-split2"
           docker tag "$img:${{ steps.upstream.outputs.version }}" "$img:main"
           docker push "$img:main"
 
