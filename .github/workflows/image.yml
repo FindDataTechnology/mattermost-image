@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           line=$(grep -E '^FROM ' Dockerfile | head -1)
-          ref=${line#FROM }
+          ref=$(echo "${line#FROM }" | sed -E 's/^ +//; s/ +AS +.*$//')
           version=${ref##*:}
           [ "$version" != "$ref" ] || { echo "::error::Dockerfile has no pinned tag (got '$ref')"; exit 1; }
           case "$version" in
@@ -71,7 +71,9 @@ jobs:
       - name: Preflight — the pinned upstream ref resolves
         run: |
           set -euo pipefail
-          ref=$(grep -E '^FROM ' Dockerfile | head -1 | sed 's/^FROM //')
+          # First FROM only, and strip any `AS <stage>` suffix: a multi-stage
+          # Dockerfile made this parse "…:12.1.0 AS upstream" as the ref.
+          ref=$(grep -E '^FROM ' Dockerfile | head -1 | sed -E 's/^FROM +//; s/ +AS +.*$//')
           repo="${ref%%:*}"
           if docker manifest inspect "$ref" >/dev/null 2>&1; then
             echo "upstream ref resolves: $ref"
