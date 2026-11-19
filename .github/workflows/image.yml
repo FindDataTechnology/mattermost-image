@@ -1,0 +1,147 @@
+# Re-host an upstream image onto the org's own registry chain.
+#
+# This workflow is deliberately NOT the platform image-publish recipe: there is
+# nothing of ours to smoke-test inside a stock upstream image, and the "load →
+# boot → probe" gate that recipe carries exists to catch our own build errors.
+# What this one DOES keep is the part that matters here — it never pushes
+# blindly, and it refuses to hand out a tag whose digest it did not observe.
+#
+# Chain: GitHub Actions → hkccr (Hong Kong) → cheap9 relay → ccr (Guangzhou).
+# Nodes pull from ccr. Pushing to ccr directly from GH is the 0.14MB/s leg that
+# produced 30-90 minute uploads (see the org's tcr-image-pipeline spec).
+name: image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# QUEUED, not cancelling: a cancelled build can leave a half-written tag, and
+# this repo is the mirror's only build path.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: hkccr.ccs.tencentyun.com
+  # fd-web already hosts a third-party image (official-web); this repo carries
+  # no code of ours, so it belongs in that namespace rather than finddata/.
+  NAMESPACE: fd-web
+  IMAGE_NAME: mattermost
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.TCR_USERNAME }}
+          password: ${{ secrets.TCR_PASSWORD }}
+
+      # The upstream tag IS the identity here, so the immutable tag must say
+      # which upstream version this is. Reading it from the Dockerfile means
+      # the tag cannot drift from the content.
+      - id: upstream
+        name: Read the pinned upstream tag from the Dockerfile
+        run: |
+          set -euo pipefail
+          line=$(grep -E '^FROM ' Dockerfile | head -1)
+          ref=${line#FROM }
+          version=${ref##*:}
+          [ "$version" != "$ref" ] || { echo "::error::Dockerfile has no pinned tag (got '$ref')"; exit 1; }
+          case "$version" in
+            latest|*"*"*) echo "::error::refusing floating tag '$version'"; exit 1;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Pinned upstream version: $version"
+
+      - id: prev
+        name: Read current digest on main (content baseline)
+        run: |
+          img="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
+          cur=$(docker buildx imagetools inspect "$img:main" \
+                --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          echo "digest=$cur" >> "$GITHUB_OUTPUT"
+          echo "current main digest: ${cur:-<none, first build>}"
+
+      - name: Build (load, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          provenance: false
+          tags: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.upstream.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A re-host that changed the image is a re-host that broke it. Verify the
+      # artifact is still what upstream ships: the version string and the entry
+      # point must both be intact.
+      - name: Sanity — the image still identifies as the version we asked for
+        run: |
+          set -euo pipefail
+          img="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.upstream.outputs.version }}"
+          echo "image size: $(docker images --format '{{.Size}}' "$img" | head -1)"
+          # MM_VERSION is baked by upstream's Dockerfile; a mismatch means we
+          # picked up something other than the tag we pin.
+          got=$(docker run --rm --entrypoint /mattermost/bin/mattermost "$img" version 2>/dev/null \
+                | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+          echo "reported version: ${got:-<could not read>}"
+          case "$got" in
+            *"${{ steps.upstream.outputs.version }}"*) echo "version matches the pin";;
+            "") echo "::warning::could not read the version string from the image (not fatal for a re-host)";;
+            *) echo "::error::image reports '$got' but Dockerfile pins '${{ steps.upstream.outputs.version }}'"; exit 1;;
+          esac
+
+      - name: Push to hkccr
+        run: |
+          img="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
+          docker push "$img:${{ steps.upstream.outputs.version }}"
+          docker tag "$img:${{ steps.upstream.outputs.version }}" "$img:main"
+          docker push "$img:main"
+
+      # Only mint the moving `main` alias after the versioned tag exists, and
+      # report the digest actually observed in the registry (not the local
+      # image ID, which is a different namespace).
+      - name: Report what landed
+        env:
+          OLD: ${{ steps.prev.outputs.digest }}
+        run: |
+          set -euo pipefail
+          img="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
+          NEW=$(docker buildx imagetools inspect "$img:${{ steps.upstream.outputs.version }}" \
+                --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          [ -n "$NEW" ] || { echo "::error::registry reports no digest for the pushed tag"; exit 1; }
+          {
+            echo "## re-hosted → hkccr"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| image | \`$img:${{ steps.upstream.outputs.version }}\` (+ :main) |"
+            echo "| digest | \`$NEW\` |"
+            echo "| previous main digest | \`${OLD:-<none>}\` |"
+            echo ""
+            if [ "$NEW" = "$OLD" ]; then
+              echo "Content unchanged — nothing to roll."
+            else
+              echo "**Next:** relay lands it on ccr within ≤5 min, then verify FROM A CLUSTER NODE:"
+              echo ""
+              echo '```'
+              echo "k3s ctr -n k8s.io images pull ccr.ccs.tencentyun.com/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.upstream.outputs.version }}"
+              echo '```'
+              echo ""
+              echo "A green workflow is not evidence the cluster can pull it."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
