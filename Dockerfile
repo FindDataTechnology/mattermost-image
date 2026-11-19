@@ -18,4 +18,4 @@
 #
 # Do NOT switch this line to team-edition to "get rid of the cap": that trades a
 # measured cap for an unusable identity story.
-FROM mattermost/mattermost-enterprise-edition:v12.1
+FROM mattermost/mattermost-enterprise-edition:12.1.0
