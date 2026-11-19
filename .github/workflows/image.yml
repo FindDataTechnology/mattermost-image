@@ -110,6 +110,30 @@ jobs:
       # A re-host that changed the image is a re-host that broke it. Verify the
       # artifact is still what upstream ships: the version string and the entry
       # point must both be intact.
+      # The base image changed (distroless -> alpine), so "the version string
+      # prints" is not enough: the binary must also LINK. A missing shared lib
+      # shows up here, not in production at 3am.
+      - name: Sanity — the binary links and runs on the new base
+        run: |
+          set -euo pipefail
+          img="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.upstream.outputs.version }}"
+          out=$(docker run --rm --entrypoint /mattermost/bin/mattermost "$img" version 2>&1) || {
+            echo "::error::binary failed to run on the new base — missing libs?"
+            echo "$out" | tail -20
+            exit 1
+          }
+          echo "$out"
+          # Layer count: the whole point of this Dockerfile. A single fat layer
+          # means the COPY split did not take and the push will fail again.
+          n=$(docker inspect -f '{{len .RootFS.Layers}}' "$img")
+          echo "layer count: $n"
+          size=$(docker images --format '{{.Size}}' "$img" | head -1)
+          echo "total size: $size"
+          if [ "$n" -lt 8 ]; then
+            echo "::error::expected the tree COPYed in >=8 layers, got $n — the split did not take"
+            exit 1
+          fi
+
       - name: Sanity — the image still identifies as the version we asked for
         run: |
           set -euo pipefail
