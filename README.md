@@ -1,7 +1,7 @@
 # Mattermost upstream image, re-hosted.
 
 One line, on purpose. This repo exists because the cluster **cannot pull the
-upstream image** — not because we want to build anything.
+upstream image fast enough to be usable** — not because we want to build anything.
 
 ## Why this repo exists
 
@@ -13,6 +13,23 @@ Measured 2026-11-19 on the cheap-ts cluster, four paths, all failed:
 | `docker.m.daocloud.io/mattermost/…` | `403 Forbidden` |
 | `docker.1ms.run/mattermost/…` | `404 not found` (not cached upstream) |
 | node `ImagePullBackOff` on cheap-5/6/8 | same three failures |
+
+> **2026-11-22 更正：`no direct egress` 这个说法不准确。** 重测发现 docker.io
+> **可达，但按体积分档**：
+>
+> | 镜像 | 结果 |
+> |---|---|
+> | `library/busybox:1.36`（2.2 MB） | 2 秒拉完 |
+> | `library/alpine:3.20` | 节点上已有 |
+> | `library/nginx:1.27-alpine` | 73 秒后仍在 `Pulling`，无失败事件 |
+> | `mattermost/mattermost-enterprise-edition:v12.1` | 同样卡在 `Pulling` |
+>
+> 集群里有 19 个容器在跑 docker.io 镜像，都是早期拉下来的小镜像。所以真实约束是
+> **跨国带宽**，不是网络不可达。结论文档不变（re-host 仍然必要），但理由要写准：
+> 说「不可达」会让下一个人去查网络配置，而该查的是带宽。
+>
+> 也别指望「等久一点就能拉完」：`ETIMEDOUT` 是 kubelet 的拉取超时，镜像越大越必然
+> 触发，且失败后 `ImagePullBackOff` 退避会越拉越长。
 
 So the image has to come from a registry the cluster **can** reach:
 `ccr.ccs.tencentyun.com`, fed by the standard publish chain
