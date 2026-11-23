@@ -12,7 +12,7 @@ Measured 2026-11-19 on the cheap-ts cluster, four paths, all failed:
 | `docker.io/mattermost/mattermost-enterprise-edition:v12.1` | `ETIMEDOUT` (no direct egress) |
 | `docker.m.daocloud.io/mattermost/…` | `403 Forbidden` |
 | `docker.1ms.run/mattermost/…` | `404 not found` (not cached upstream) |
-| node `ImagePullBackOff` on cheap-5/6/8 | same three failures |
+| node `ImagePullBackOff` on the worker nodes | same three failures |
 
 > **2026-11-22 更正：`no direct egress` 这个说法不准确。** 重测发现 docker.io
 > **可达，但按体积分档**：
